@@ -13,8 +13,10 @@ import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -54,11 +56,23 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
             String columnDefault) {
     }
 
+    private record PhysicalProperty(
+            RelationalPersistentProperty property,
+            String columnName,
+            boolean isPrimaryKey) {
+    }
+
     @Override
     public void run(ApplicationArguments args) {
+        Set<Class<?>> embeddedTypes = findEmbeddedTypes();
+
         // Phase 1: Create all tables, update missing or modified columns, build
         // indexes, and set up check constraints
         for (RelationalPersistentEntity<?> entity : mappingContext.getPersistentEntities()) {
+            if (embeddedTypes.contains(entity.getType())) {
+                continue;
+            }
+
             String tableName = entity.getTableName().getReference().toLowerCase();
 
             createTableIfNotExists(entity, tableName);
@@ -70,17 +84,61 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
         // Phase 2: Create foreign key constraints strictly after all referenced
         // entities exist
         for (RelationalPersistentEntity<?> entity : mappingContext.getPersistentEntities()) {
+            if (embeddedTypes.contains(entity.getType())) {
+                continue;
+            }
+
             String tableName = entity.getTableName().getReference().toLowerCase();
 
             createForeignKeys(entity, tableName);
         }
     }
 
-    private void createTableIfNotExists(RelationalPersistentEntity<?> entity, String tableName) {
-        List<String> pkColumnNames = new ArrayList<>();
+    private Set<Class<?>> findEmbeddedTypes() {
+        Set<Class<?>> embeddedTypes = new HashSet<>();
+        for (RelationalPersistentEntity<?> entity : mappingContext.getPersistentEntities()) {
+            for (RelationalPersistentProperty property : entity) {
+                if (property.isEmbedded()) {
+                    embeddedTypes.add(property.getTypeInformation().getActualType().getType());
+                }
+            }
+        }
+        return embeddedTypes;
+    }
+
+    private List<PhysicalProperty> getPhysicalProperties(RelationalPersistentEntity<?> entity) {
+        List<PhysicalProperty> properties = new ArrayList<>();
+        collectPhysicalProperties(entity, false, properties);
+        return properties;
+    }
+
+    private void collectPhysicalProperties(
+            RelationalPersistentEntity<?> entity,
+            boolean parentIsId,
+            List<PhysicalProperty> properties) {
         for (RelationalPersistentProperty property : entity) {
-            if (property.isIdProperty()) {
-                pkColumnNames.add(property.getColumnName().getReference());
+            boolean isId = property.isIdProperty() || parentIsId;
+
+            if (property.isEmbedded()) {
+                RelationalPersistentEntity<?> embeddedEntity = mappingContext.getPersistentEntity(
+                        property.getTypeInformation().getActualType());
+                if (embeddedEntity != null) {
+                    collectPhysicalProperties(embeddedEntity, isId, properties);
+                }
+            } else {
+                String columnName = property.getColumnName().getReference().toLowerCase();
+                properties.add(new PhysicalProperty(property, columnName, isId));
+            }
+        }
+    }
+
+    private void createTableIfNotExists(RelationalPersistentEntity<?> entity, String tableName) {
+        List<PhysicalProperty> properties = getPhysicalProperties(entity);
+
+        List<String> pkColumnNames = new ArrayList<>();
+        for (PhysicalProperty physProp : properties) {
+            if (physProp.isPrimaryKey()) {
+                pkColumnNames.add(physProp.columnName());
             }
         }
 
@@ -90,22 +148,24 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
                 .append(" (");
 
         boolean first = true;
-        for (RelationalPersistentProperty property : entity) {
+        for (PhysicalProperty physProp : properties) {
+            RelationalPersistentProperty property = physProp.property();
+            String columnName = physProp.columnName();
+
             if (!first) {
                 sql.append(", ");
             }
 
-            String columnName = property.getColumnName().getReference().toLowerCase();
             sql.append(columnName)
                     .append(" ")
                     .append(mapToSqlType(property));
 
-            String customDefault = getTargetDefaultValue(property);
+            String customDefault = getTargetDefaultValue(property, physProp.isPrimaryKey());
             if (customDefault != null) {
                 sql.append(" DEFAULT ").append(customDefault);
             }
 
-            if (isNonNull(property) && !property.isIdProperty()) {
+            if (isNonNull(property) && !physProp.isPrimaryKey()) {
                 sql.append(" NOT NULL");
             }
 
@@ -116,7 +176,7 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
                         .append(buildEnumCheckClause(property, columnName));
             }
 
-            if (property.isIdProperty() && !isCompositeKey) {
+            if (physProp.isPrimaryKey() && !isCompositeKey) {
                 sql.append(" PRIMARY KEY");
                 if (isAutoIncrementType(property.getType())) {
                     sql.append(" GENERATED BY DEFAULT AS IDENTITY");
@@ -165,11 +225,12 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
             }
         }
 
-        for (RelationalPersistentProperty property : entity) {
-            String columnName = property.getColumnName().getReference().toLowerCase();
+        for (PhysicalProperty physProp : getPhysicalProperties(entity)) {
+            RelationalPersistentProperty property = physProp.property();
+            String columnName = physProp.columnName();
             String targetType = mapToSqlType(property);
-            boolean targetNonNull = isNonNull(property) && !property.isIdProperty();
-            String targetDefault = getTargetDefaultValue(property);
+            boolean targetNonNull = isNonNull(property) && !physProp.isPrimaryKey();
+            String targetDefault = getTargetDefaultValue(property, physProp.isPrimaryKey());
 
             if (!existingColumns.containsKey(columnName)) {
                 StringBuilder sql = new StringBuilder("ALTER TABLE ")
@@ -221,7 +282,7 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
                             .sql(setNotNullSql)
                             .then()
                             .block();
-                } else if (!targetNonNull && !current.isNullable() && !property.isIdProperty()) {
+                } else if (!targetNonNull && !current.isNullable() && !physProp.isPrimaryKey()) {
                     String dropNotNullSql = String.format(
                             "ALTER TABLE %s ALTER COLUMN %s DROP NOT NULL;",
                             tableName, columnName);
@@ -255,9 +316,10 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
     }
 
     private void createEnumCheckConstraints(RelationalPersistentEntity<?> entity, String tableName) {
-        for (RelationalPersistentProperty property : entity) {
+        for (PhysicalProperty physProp : getPhysicalProperties(entity)) {
+            RelationalPersistentProperty property = physProp.property();
             if (property.getType().isEnum()) {
-                String columnName = property.getColumnName().getReference().toLowerCase();
+                String columnName = physProp.columnName();
                 String constraintName = "chk_" + tableName + "_" + columnName;
                 String checkClause = buildEnumCheckClause(property, columnName);
 
@@ -286,14 +348,15 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
             }
         }
 
-        for (RelationalPersistentProperty property : entity) {
+        for (PhysicalProperty physProp : getPhysicalProperties(entity)) {
+            RelationalPersistentProperty property = physProp.property();
             Field field = property.getField();
             if (field != null) {
                 Index[] fieldIndexes = field.getAnnotationsByType(Index.class);
                 for (Index index : fieldIndexes) {
                     String[] cols = index.columns().length > 0
                             ? index.columns()
-                            : new String[] { property.getColumnName().getReference() };
+                            : new String[] { physProp.columnName() };
                     createIndex(tableName, index, cols);
                 }
             }
@@ -318,11 +381,12 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
     }
 
     private void createForeignKeys(RelationalPersistentEntity<?> entity, String tableName) {
-        for (RelationalPersistentProperty property : entity) {
+        for (PhysicalProperty physProp : getPhysicalProperties(entity)) {
+            RelationalPersistentProperty property = physProp.property();
             Field field = property.getField();
             if (field != null && field.isAnnotationPresent(ForeignKey.class)) {
                 ForeignKey foreignKey = field.getAnnotation(ForeignKey.class);
-                String columnName = property.getColumnName().getReference().toLowerCase();
+                String columnName = physProp.columnName();
                 String constraintName = "fk_" + tableName + "_" + columnName;
 
                 String sql = String.format(
@@ -342,12 +406,12 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
         }
     }
 
-    private String getTargetDefaultValue(RelationalPersistentProperty property) {
+    private String getTargetDefaultValue(RelationalPersistentProperty property, boolean isPrimaryKey) {
         Field field = property.getField();
         if (field != null && field.isAnnotationPresent(ColumnDefault.class)) {
             return field.getAnnotation(ColumnDefault.class).value();
         }
-        if (property.isIdProperty()) {
+        if (isPrimaryKey) {
             if (property.getType().equals(String.class)) {
                 return "gen_random_uuid()::text";
             } else if (property.getType().equals(UUID.class)) {
