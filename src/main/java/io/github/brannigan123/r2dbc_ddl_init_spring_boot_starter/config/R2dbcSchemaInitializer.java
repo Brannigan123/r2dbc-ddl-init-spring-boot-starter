@@ -2,6 +2,7 @@ package io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.config;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
+import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -34,6 +35,7 @@ import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.Colu
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.ForeignKey;
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.Index;
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.JsonColumn;
+import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.NumericPrecisionScale;
 import io.r2dbc.postgresql.codec.Interval;
 import io.r2dbc.postgresql.codec.Json;
 import io.r2dbc.spi.Blob;
@@ -457,6 +459,9 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
         if (normalizedTarget.startsWith("varchar")) {
             return !normalizedDbDataType.equals("character varying") && !normalizedDbDataType.equals("varchar");
         }
+        if (normalizedTarget.startsWith("numeric")) {
+            return !normalizedDbDataType.equals("numeric") && !normalizedDbUdt.equals("numeric");
+        }
         if (normalizedTarget.equals("jsonb")) {
             return !normalizedDbUdt.equals("jsonb");
         }
@@ -540,6 +545,15 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
             return property.isIdProperty() ? "VARCHAR(36)" : "VARCHAR(255)";
         } else if (type.equals(Long.class) || type.equals(long.class) || type.equals(BigInteger.class)) {
             return "BIGINT";
+        } else if (type.equals(BigDecimal.class)
+                || type.equals(Double.class) || type.equals(double.class)
+                || type.equals(Float.class) || type.equals(float.class)) {
+            if (field != null && field.isAnnotationPresent(NumericPrecisionScale.class)) {
+                NumericPrecisionScale numericPrecisionScale = field.getAnnotation(NumericPrecisionScale.class);
+                return String.format("NUMERIC(%d,%d)", numericPrecisionScale.precision(),
+                        numericPrecisionScale.scale());
+            }
+            return "NUMERIC";
         } else if (type.equals(Integer.class) || type.equals(int.class)) {
             return "INT";
         } else if (type.equals(Boolean.class) || type.equals(boolean.class)) {
