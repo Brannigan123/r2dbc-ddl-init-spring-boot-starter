@@ -3,6 +3,7 @@ package io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.config;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -31,6 +32,7 @@ import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.Colu
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.ForeignKey;
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.Index;
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.JsonColumn;
+import io.r2dbc.spi.Blob;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -454,6 +456,9 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
         if (normalizedTarget.equals("jsonb")) {
             return !normalizedDbUdt.equals("jsonb");
         }
+        if (normalizedTarget.equals("bytea")) {
+            return !normalizedDbDataType.equals("bytea") && !normalizedDbUdt.equals("bytea");
+        }
         if (normalizedTarget.equals("timestamptz")) {
             return !normalizedDbDataType.contains("timestamp") || !normalizedDbDataType.contains("with time zone");
         }
@@ -515,6 +520,9 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
             return "JSONB";
         } else if (JsonNode.class.isAssignableFrom(type)) {
             return "JSONB";
+        } else if (type.equals(byte[].class) || ByteBuffer.class.isAssignableFrom(type)
+                || Blob.class.isAssignableFrom(type)) {
+            return "BYTEA";
         } else if (type.isEnum()) {
             return "VARCHAR(255)";
         } else if (type.equals(UUID.class)) {
