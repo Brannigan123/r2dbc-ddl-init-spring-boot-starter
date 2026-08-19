@@ -35,6 +35,7 @@ import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.Fore
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.Index;
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.JsonColumn;
 import io.r2dbc.postgresql.codec.Interval;
+import io.r2dbc.postgresql.codec.Json;
 import io.r2dbc.spi.Blob;
 import tools.jackson.databind.JsonNode;
 
@@ -524,7 +525,7 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
 
         if (field != null && field.isAnnotationPresent(JsonColumn.class)) {
             return "JSONB";
-        } else if (JsonNode.class.isAssignableFrom(type)) {
+        } else if (Json.class.isAssignableFrom(type) || JsonNode.class.isAssignableFrom(type)) {
             return "JSONB";
         } else if (type.equals(byte[].class) || ByteBuffer.class.isAssignableFrom(type)
                 || Blob.class.isAssignableFrom(type)) {
