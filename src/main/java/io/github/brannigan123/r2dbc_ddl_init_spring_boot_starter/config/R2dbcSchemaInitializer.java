@@ -4,12 +4,14 @@ import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.OffsetTime;
+import java.time.Period;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -32,6 +34,7 @@ import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.Colu
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.ForeignKey;
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.Index;
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.JsonColumn;
+import io.r2dbc.postgresql.codec.Interval;
 import io.r2dbc.spi.Blob;
 import tools.jackson.databind.JsonNode;
 
@@ -459,6 +462,9 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
         if (normalizedTarget.equals("bytea")) {
             return !normalizedDbDataType.equals("bytea") && !normalizedDbUdt.equals("bytea");
         }
+        if (normalizedTarget.equals("interval")) {
+            return !normalizedDbDataType.equals("interval") && !normalizedDbUdt.equals("interval");
+        }
         if (normalizedTarget.equals("timestamptz")) {
             return !normalizedDbDataType.contains("timestamp") || !normalizedDbDataType.contains("with time zone");
         }
@@ -523,6 +529,8 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
         } else if (type.equals(byte[].class) || ByteBuffer.class.isAssignableFrom(type)
                 || Blob.class.isAssignableFrom(type)) {
             return "BYTEA";
+        } else if (type.equals(Duration.class) || type.equals(Period.class) || Interval.class.isAssignableFrom(type)) {
+            return "INTERVAL";
         } else if (type.isEnum()) {
             return "VARCHAR(255)";
         } else if (type.equals(UUID.class)) {
