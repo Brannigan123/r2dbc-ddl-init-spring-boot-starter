@@ -389,29 +389,70 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
     }
 
     private void createForeignKeys(RelationalPersistentEntity<?> entity, String tableName) {
+        Class<?> entityClass = entity.getType();
+
+        // 1. Class-level @ForeignKey annotations (recommended for composite foreign
+        // keys)
+        ForeignKey[] classForeignKeys = entityClass.getAnnotationsByType(ForeignKey.class);
+        for (ForeignKey foreignKey : classForeignKeys) {
+            String[] localCols = foreignKey.columns();
+            String[] refCols = foreignKey.referencedColumns().length > 0
+                    ? foreignKey.referencedColumns()
+                    : (!foreignKey.column().isEmpty() ? new String[] { foreignKey.column() } : new String[0]);
+
+            if (localCols.length > 0 && refCols.length > 0) {
+                applyForeignKeyConstraint(tableName, foreignKey, localCols, refCols);
+            }
+        }
+
+        // 2. Field-level @ForeignKey annotations (single or specified multi-column)
         for (PhysicalProperty physProp : getPhysicalProperties(entity)) {
             RelationalPersistentProperty property = physProp.property();
             Field field = property.getField();
-            if (field != null && field.isAnnotationPresent(ForeignKey.class)) {
-                ForeignKey foreignKey = field.getAnnotation(ForeignKey.class);
-                String columnName = physProp.columnName();
-                String constraintName = "fk_" + tableName + "_" + columnName;
+            if (field != null) {
+                ForeignKey[] fieldForeignKeys = field.getAnnotationsByType(ForeignKey.class);
+                for (ForeignKey foreignKey : fieldForeignKeys) {
+                    String[] localCols = foreignKey.columns().length > 0
+                            ? foreignKey.columns()
+                            : new String[] { physProp.columnName() };
 
-                String sql = String.format(
-                        "DO $$ BEGIN " +
-                                "IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '%s') THEN " +
-                                "ALTER TABLE %s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s(%s) ON DELETE %s; " +
-                                "END IF; END $$;",
-                        constraintName, tableName, constraintName, columnName, foreignKey.table(),
-                        foreignKey.column(),
-                        foreignKey.onDelete().getAction());
+                    String[] refCols = foreignKey.referencedColumns().length > 0
+                            ? foreignKey.referencedColumns()
+                            : (!foreignKey.column().isEmpty() ? new String[] { foreignKey.column() } : new String[0]);
 
-                entityTemplate.getDatabaseClient()
-                        .sql(sql)
-                        .then()
-                        .block();
+                    if (localCols.length > 0 && refCols.length > 0) {
+                        applyForeignKeyConstraint(tableName, foreignKey, localCols, refCols);
+                    }
+                }
             }
         }
+    }
+
+    private void applyForeignKeyConstraint(
+            String tableName,
+            ForeignKey foreignKey,
+            String[] localCols,
+            String[] refCols) {
+
+        String constraintName = foreignKey.name().isEmpty()
+                ? "fk_" + tableName + "_" + String.join("_", localCols)
+                : foreignKey.name();
+
+        String localColumnList = String.join(", ", localCols);
+        String refColumnList = String.join(", ", refCols);
+
+        String sql = String.format(
+                "DO $$ BEGIN " +
+                        "IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '%s') THEN " +
+                        "ALTER TABLE %s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s(%s) ON DELETE %s; " +
+                        "END IF; END $$;",
+                constraintName, tableName, constraintName, localColumnList, foreignKey.table(),
+                refColumnList, foreignKey.onDelete().getAction());
+
+        entityTemplate.getDatabaseClient()
+                .sql(sql)
+                .then()
+                .block();
     }
 
     private String getTargetDefaultValue(RelationalPersistentProperty property, boolean isPrimaryKey) {
