@@ -15,6 +15,7 @@ import org.springframework.data.relational.core.mapping.RelationalMappingContext
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.config.R2dbcSchemaInitializer;
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.converter.GenericEnumToStringConverter;
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.converter.GenericStringToEnumConverterFactory;
+import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.upsert.R2dbcUpsertTemplate;
 
 @AutoConfiguration
 @ConditionalOnClass(R2dbcEntityTemplate.class)
@@ -34,5 +35,13 @@ public class R2dbcDdlInitAutoConfiguration {
         converters.add(new GenericEnumToStringConverter());
         converters.add(new GenericStringToEnumConverterFactory());
         return R2dbcCustomConversions.of(PostgresDialect.INSTANCE, converters);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public R2dbcUpsertTemplate r2dbcUpsertTemplate(
+            R2dbcEntityTemplate entityTemplate,
+            RelationalMappingContext mappingContext) {
+        return new R2dbcUpsertTemplate(entityTemplate, mappingContext);
     }
 }
