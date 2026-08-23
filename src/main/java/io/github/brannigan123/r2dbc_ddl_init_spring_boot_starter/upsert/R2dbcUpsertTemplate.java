@@ -1,14 +1,24 @@
 package io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.upsert;
 
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
 import org.springframework.data.annotation.CreatedBy;
 import org.springframework.data.annotation.CreatedDate;
+import org.springframework.data.annotation.LastModifiedBy;
+import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.domain.ReactiveAuditorAware;
 import org.springframework.data.mapping.PersistentPropertyAccessor;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
 import org.springframework.data.relational.core.mapping.RelationalMappingContext;
@@ -17,6 +27,7 @@ import org.springframework.data.relational.core.mapping.RelationalPersistentProp
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Component;
 
+import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.config.ApplicationContextProvider;
 import reactor.core.publisher.Mono;
 
 @Component
@@ -24,20 +35,127 @@ public class R2dbcUpsertTemplate {
 
     private final R2dbcEntityTemplate entityTemplate;
     private final RelationalMappingContext mappingContext;
+    private final ObjectProvider<ReactiveAuditorAware<String>> auditorAwareProvider;
     private final Map<Class<?>, UpsertMetadata> metadataCache = new ConcurrentHashMap<>();
 
     public R2dbcUpsertTemplate(R2dbcEntityTemplate entityTemplate, RelationalMappingContext mappingContext) {
+        this(entityTemplate, mappingContext, (ObjectProvider<ReactiveAuditorAware<String>>) null);
+    }
+
+    @Autowired
+    @SuppressWarnings("unchecked")
+    public R2dbcUpsertTemplate(
+            R2dbcEntityTemplate entityTemplate,
+            RelationalMappingContext mappingContext,
+            ObjectProvider<?> auditorAwareProvider) {
         this.entityTemplate = entityTemplate;
         this.mappingContext = mappingContext;
+        this.auditorAwareProvider = (ObjectProvider<ReactiveAuditorAware<String>>) auditorAwareProvider;
     }
 
     public <T> Mono<T> upsert(T entity) {
-        Objects.requireNonNull(entity, "Entity must not be null");
+        if (entity == null) {
+            return Mono.empty();
+        }
 
+        return Mono.defer(() -> applyAuditing(entity)
+                .flatMap(this::executeUpsert));
+    }
+
+    private <T> Mono<T> applyAuditing(T entity) {
         Class<?> entityClass = entity.getClass();
-        UpsertMetadata metadata = metadataCache.computeIfAbsent(entityClass, this::resolveMetadata);
-
         RelationalPersistentEntity<?> persistentEntity = mappingContext.getRequiredPersistentEntity(entityClass);
+
+        boolean hasCreatedBy = persistentEntity.getPersistentProperty(CreatedBy.class) != null;
+        boolean hasLastModifiedBy = persistentEntity.getPersistentProperty(LastModifiedBy.class) != null;
+
+        if (!hasCreatedBy && !hasLastModifiedBy) {
+            return Mono.just(populateAuditProperties(entity, persistentEntity, null));
+        }
+
+        return getAuditor()
+                .map(auditor -> populateAuditProperties(entity, persistentEntity, auditor.isBlank() ? null : auditor));
+    }
+
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private Mono<String> getAuditor() {
+        ReactiveAuditorAware<String> auditorAware = null;
+
+        if (auditorAwareProvider != null) {
+            auditorAware = auditorAwareProvider.getIfAvailable();
+        }
+
+        if (auditorAware == null) {
+            ApplicationContext context = ApplicationContextProvider.getApplicationContext();
+            if (context != null) {
+                if (context.containsBean("auditorProvider")) {
+                    auditorAware = (ReactiveAuditorAware<String>) context.getBean("auditorProvider");
+                } else if (context.containsBean("auditorAware")) {
+                    auditorAware = (ReactiveAuditorAware<String>) context.getBean("auditorAware");
+                } else {
+                    ObjectProvider<ReactiveAuditorAware> provider = context.getBeanProvider(ReactiveAuditorAware.class);
+                    auditorAware = provider.getIfAvailable();
+                }
+            }
+        }
+
+        if (auditorAware != null) {
+            return auditorAware.getCurrentAuditor()
+                    .defaultIfEmpty("")
+                    .onErrorResume(e -> {
+                        return Mono.just("");
+                    });
+        }
+
+        return Mono.just("");
+    }
+
+    private <T> T populateAuditProperties(T entity, RelationalPersistentEntity<?> persistentEntity, String auditor) {
+        PersistentPropertyAccessor<T> accessor = (PersistentPropertyAccessor<T>) persistentEntity
+                .getPropertyAccessor(entity);
+        Instant now = Instant.now();
+
+        for (RelationalPersistentProperty prop : persistentEntity) {
+            if (prop.isAnnotationPresent(CreatedDate.class)) {
+                Object currentVal = accessor.getProperty(prop);
+                if (currentVal == null) {
+                    accessor.setProperty(prop, convertTemporal(now, prop.getType()));
+                }
+            } else if (prop.isAnnotationPresent(LastModifiedDate.class)) {
+                accessor.setProperty(prop, convertTemporal(now, prop.getType()));
+            } else if (prop.isAnnotationPresent(CreatedBy.class)) {
+                Object currentVal = accessor.getProperty(prop);
+                if (currentVal == null && auditor != null) {
+                    accessor.setProperty(prop, auditor);
+                }
+            } else if (prop.isAnnotationPresent(LastModifiedBy.class)) {
+                if (auditor != null) {
+                    accessor.setProperty(prop, auditor);
+                }
+            }
+        }
+        return accessor.getBean();
+    }
+
+    private Object convertTemporal(Instant instant, Class<?> targetType) {
+        if (targetType.equals(Instant.class)) {
+            return instant;
+        } else if (targetType.equals(LocalDateTime.class)) {
+            return LocalDateTime.ofInstant(instant, ZoneOffset.UTC);
+        } else if (targetType.equals(OffsetDateTime.class)) {
+            return instant.atOffset(ZoneOffset.UTC);
+        } else if (targetType.equals(ZonedDateTime.class)) {
+            return instant.atZone(ZoneOffset.UTC);
+        } else if (targetType.equals(Long.class) || targetType.equals(long.class)) {
+            return instant.toEpochMilli();
+        }
+        return instant;
+    }
+
+    private <T> Mono<T> executeUpsert(T entity) {
+        Class<?> entityClass = entity.getClass();
+        RelationalPersistentEntity<?> persistentEntity = mappingContext.getRequiredPersistentEntity(entityClass);
+        UpsertMetadata metadata = metadataCache.computeIfAbsent(entityClass, this::resolveMetadata);
         PersistentPropertyAccessor<?> propertyAccessor = persistentEntity.getPropertyAccessor(entity);
 
         DatabaseClient.GenericExecuteSpec executeSpec = entityTemplate.getDatabaseClient().sql(metadata.sql());

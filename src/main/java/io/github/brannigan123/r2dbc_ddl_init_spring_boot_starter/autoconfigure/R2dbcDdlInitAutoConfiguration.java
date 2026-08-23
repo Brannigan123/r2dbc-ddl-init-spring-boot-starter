@@ -16,6 +16,7 @@ import org.springframework.data.r2dbc.repository.config.EnableR2dbcRepositories;
 import org.springframework.data.r2dbc.repository.support.R2dbcRepositoryFactoryBean;
 import org.springframework.data.relational.core.mapping.RelationalMappingContext;
 
+import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.config.ApplicationContextProvider;
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.config.R2dbcSchemaInitializer;
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.converter.GenericEnumToStringConverter;
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.converter.GenericStringToEnumConverterFactory;
@@ -26,6 +27,12 @@ import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.upsert.R2dbcUps
 @ConditionalOnClass(R2dbcEntityTemplate.class)
 @EnableR2dbcRepositories(repositoryBaseClass = CommonR2dbcRepositoryImpl.class)
 public class R2dbcDdlInitAutoConfiguration {
+
+    @Bean
+    @ConditionalOnMissingBean
+    public ApplicationContextProvider applicationContextProvider() {
+        return new ApplicationContextProvider();
+    }
 
     @Bean
     @ConditionalOnMissingBean
