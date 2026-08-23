@@ -86,4 +86,13 @@ public class CommonR2dbcRepositoryImpl<T, ID> extends SimpleR2dbcRepository<T, I
         return Mono.zip(contentMono, countMono)
                 .map(tuple -> new PageImpl<>(tuple.getT1(), pageable, tuple.getT2()));
     }
+
+    @Override
+    public Mono<Long> delete(Criteria criteria) {
+        Criteria criteriaToUse = criteria != null ? criteria : Criteria.empty();
+        Class<T> domainType = entityInformation.getJavaType();
+
+        Query query = Query.query(criteriaToUse);
+        return entityTemplate.delete(domainType).matching(query).all();
+    }
 }
