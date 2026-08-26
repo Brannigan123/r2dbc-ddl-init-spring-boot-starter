@@ -50,6 +50,7 @@ import tools.jackson.databind.JsonNode;
  * synchronizes their tables, columns, indexes, check constraints and foreign
  * keys.
  */
+@SuppressWarnings("java:S1192")
 public class R2dbcSchemaInitializer implements ApplicationRunner {
 
     private final R2dbcEntityTemplate entityTemplate;
@@ -197,6 +198,7 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
         return new SearchColumnSpec(searchColumnName, columnDdl, indexDdl);
     }
 
+    @SuppressWarnings("java:S3776")
     private void createTableIfNotExists(RelationalPersistentEntity<?> entity, String tableName) {
         List<PhysicalProperty> properties = getPhysicalProperties(entity);
 
@@ -280,6 +282,7 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
         }
     }
 
+    @SuppressWarnings("java:S3776")
     private void synchronizeTableColumns(RelationalPersistentEntity<?> entity, String tableName) {
         List<ColumnMetaData> columnMetaList = entityTemplate.getDatabaseClient()
                 .sql("""
@@ -479,6 +482,7 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
                 .block();
     }
 
+    @SuppressWarnings({"java:S3776", "java:S3358"})
     private void createForeignKeys(RelationalPersistentEntity<?> entity, String tableName) {
         Class<?> entityClass = entity.getType();
 
@@ -510,7 +514,7 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
                             ? foreignKey.referencedColumns()
                             : (!foreignKey.column().isEmpty() ? new String[] { foreignKey.column() } : new String[0]);
 
-                    if (localCols.length > 0 && refCols.length > 0) {
+                    if (refCols.length > 0) {
                         applyForeignKeyConstraint(tableName, foreignKey, localCols, refCols);
                     }
                 }
@@ -582,6 +586,7 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
         return false;
     }
 
+    @SuppressWarnings("java:S3776")
     private boolean isTypeMismatched(String targetSqlType, String dbDataType, String dbUdtName) {
         String normalizedTarget = targetSqlType.toLowerCase().replaceAll("\\s+", "");
         String normalizedDbDataType = dbDataType != null ? dbDataType.toLowerCase().replaceAll("\\s+", "") : "";
@@ -658,6 +663,7 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
                 || type.equals(BigInteger.class);
     }
 
+    @SuppressWarnings("java:S3776")
     private String mapToSqlType(RelationalPersistentProperty property) {
         Class<?> type = property.getType();
         Field field = property.getField();
