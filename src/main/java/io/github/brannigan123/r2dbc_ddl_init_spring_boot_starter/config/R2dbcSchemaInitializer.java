@@ -14,16 +14,10 @@ import java.time.OffsetDateTime;
 import java.time.OffsetTime;
 import java.time.Period;
 import java.time.ZonedDateTime;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.stream.Collectors;
 
+import org.jspecify.annotations.NonNull;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate;
@@ -36,6 +30,8 @@ import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.Fore
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.Index;
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.JsonColumn;
 import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.NumericPrecisionScale;
+import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.SearchIndex;
+import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation.SearchableField;
 import io.r2dbc.postgresql.codec.Interval;
 import io.r2dbc.postgresql.codec.Json;
 import io.r2dbc.spi.Blob;
@@ -70,8 +66,14 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
             boolean isPrimaryKey) {
     }
 
+    private record SearchColumnSpec(
+            String columnName,
+            String columnDdl,
+            String indexDdl) {
+    }
+
     @Override
-    public void run(ApplicationArguments args) {
+    public void run(@NonNull ApplicationArguments args) {
         Set<Class<?>> embeddedTypes = findEmbeddedTypes();
 
         // Phase 1: Create all tables, update missing or modified columns, build
@@ -107,7 +109,7 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
         for (RelationalPersistentEntity<?> entity : mappingContext.getPersistentEntities()) {
             for (RelationalPersistentProperty property : entity) {
                 if (property.isEmbedded()) {
-                    embeddedTypes.add(property.getTypeInformation().getActualType().getType());
+                    embeddedTypes.add(Objects.requireNonNull(property.getTypeInformation().getActualType()).getType());
                 }
             }
         }
@@ -129,7 +131,7 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
 
             if (property.isEmbedded()) {
                 RelationalPersistentEntity<?> embeddedEntity = mappingContext.getPersistentEntity(
-                        property.getTypeInformation().getActualType());
+                        Objects.requireNonNull(property.getTypeInformation().getActualType()));
                 if (embeddedEntity != null) {
                     collectPhysicalProperties(embeddedEntity, isId, properties);
                 }
@@ -138,6 +140,53 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
                 properties.add(new PhysicalProperty(property, columnName, isId));
             }
         }
+    }
+
+    private SearchColumnSpec buildSearchColumnSpec(RelationalPersistentEntity<?> entity, String tableName) {
+        PhysicalProperty searchPhysProp = null;
+        SearchIndex searchIndexAnno = null;
+
+        for (PhysicalProperty physProp : getPhysicalProperties(entity)) {
+            Field field = physProp.property().getField();
+            if (field != null && field.isAnnotationPresent(SearchIndex.class)) {
+                searchPhysProp = physProp;
+                searchIndexAnno = field.getAnnotation(SearchIndex.class);
+                break;
+            }
+        }
+
+        if (searchPhysProp == null || searchIndexAnno == null) {
+            return null;
+        }
+
+        List<String> expressions = new ArrayList<>();
+        for (PhysicalProperty physProp : getPhysicalProperties(entity)) {
+            Field field = physProp.property().getField();
+            if (field != null && field.isAnnotationPresent(SearchableField.class)) {
+                SearchableField searchableField = field.getAnnotation(SearchableField.class);
+                String columnName = physProp.columnName();
+                String weight = searchableField.weight().getCode();
+                String config = searchIndexAnno.config();
+
+                expressions.add(String.format("setweight(to_tsvector('%s', coalesce(%s, '')), '%s')",
+                        config, columnName, weight));
+            }
+        }
+
+        if (expressions.isEmpty()) {
+            throw new IllegalStateException("Entity " + entity.getType().getName()
+                    + " contains @SearchIndex on column '" + searchPhysProp.columnName()
+                    + "' but no fields annotated with @SearchableField.");
+        }
+
+        String searchColumnName = searchPhysProp.columnName();
+        String vectorExpression = String.join(" || ' ' || ", expressions);
+        String columnDdl = String.format("%s tsvector GENERATED ALWAYS AS (%s) STORED", searchColumnName, vectorExpression);
+
+        String indexName = "idx_" + tableName + "_" + searchColumnName;
+        String indexDdl = String.format("CREATE INDEX IF NOT EXISTS %s ON %s USING gin (%s);", indexName, tableName, searchColumnName);
+
+        return new SearchColumnSpec(searchColumnName, columnDdl, indexDdl);
     }
 
     private void createTableIfNotExists(RelationalPersistentEntity<?> entity, String tableName) {
@@ -155,6 +204,8 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
                 .append(tableName)
                 .append(" (");
 
+        SearchColumnSpec searchSpec = buildSearchColumnSpec(entity, tableName);
+
         boolean first = true;
         for (PhysicalProperty physProp : properties) {
             RelationalPersistentProperty property = physProp.property();
@@ -162,6 +213,12 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
 
             if (!first) {
                 sql.append(", ");
+            }
+
+            if (searchSpec != null && searchSpec.columnName().equals(columnName)) {
+                sql.append(searchSpec.columnDdl());
+                first = false;
+                continue;
             }
 
             sql.append(columnName)
@@ -206,6 +263,13 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
                 .sql(sql.toString())
                 .then()
                 .block();
+
+        if (searchSpec != null) {
+            entityTemplate.getDatabaseClient()
+                    .sql(searchSpec.indexDdl())
+                    .then()
+                    .block();
+        }
     }
 
     private void synchronizeTableColumns(RelationalPersistentEntity<?> entity, String tableName) {
@@ -233,9 +297,28 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
             }
         }
 
+        SearchColumnSpec searchSpec = buildSearchColumnSpec(entity, tableName);
+
         for (PhysicalProperty physProp : getPhysicalProperties(entity)) {
             RelationalPersistentProperty property = physProp.property();
             String columnName = physProp.columnName();
+
+            if (searchSpec != null && searchSpec.columnName().equals(columnName)) {
+                if (!existingColumns.containsKey(columnName)) {
+                    String alterSql = String.format("ALTER TABLE %s ADD COLUMN %s;", tableName, searchSpec.columnDdl());
+                    entityTemplate.getDatabaseClient()
+                            .sql(alterSql)
+                            .then()
+                            .block();
+
+                    entityTemplate.getDatabaseClient()
+                            .sql(searchSpec.indexDdl())
+                            .then()
+                            .block();
+                }
+                continue;
+            }
+
             String targetType = mapToSqlType(property);
             boolean targetNonNull = isNonNull(property) && !physProp.isPrimaryKey();
             String targetDefault = getTargetDefaultValue(property, physProp.isPrimaryKey());
@@ -521,6 +604,9 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
         if (normalizedTarget.equals("uuid")) {
             return !normalizedDbUdt.equals("uuid");
         }
+        if (normalizedTarget.equals("tsvector")) {
+            return !normalizedDbDataType.equals("tsvector") && !normalizedDbUdt.equals("tsvector");
+        }
         if (normalizedTarget.equals("bigint")) {
             return !normalizedDbDataType.equals("bigint");
         }
@@ -569,7 +655,9 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
         Class<?> type = property.getType();
         Field field = property.getField();
 
-        if (field != null && field.isAnnotationPresent(JsonColumn.class)) {
+        if (field != null && field.isAnnotationPresent(SearchIndex.class)) {
+            return "TSVECTOR";
+        } else if (field != null && field.isAnnotationPresent(JsonColumn.class)) {
             return "JSONB";
         } else if (Json.class.isAssignableFrom(type) || JsonNode.class.isAssignableFrom(type)) {
             return "JSONB";

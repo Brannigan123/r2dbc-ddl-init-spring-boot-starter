@@ -24,4 +24,10 @@ public interface CommonR2dbcRepository<T, ID> extends ReactiveCrudRepository<T, 
     <R> Mono<Page<R>> findAll(Criteria criteria, Pageable pageable, Function<T, R> mapper);
 
     Mono<Long> delete(Criteria criteria);
+
+    Mono<Page<T>> findAllWithSearch(String searchQuery, Pageable pageable);
+
+    Mono<Page<T>> findAllWithSearch(String searchQuery, Criteria criteria, Pageable pageable);
+
+    <R> Mono<Page<R>> findAllWithSearch(String searchQuery, Criteria criteria, Pageable pageable, Function<T, R> mapper);
 }
