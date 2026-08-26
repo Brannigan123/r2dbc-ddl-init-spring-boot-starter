@@ -566,7 +566,7 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
         }
         if (isPrimaryKey && !isCompositeKey) {
             Class<?> type = property.getType();
-            if (isAutoIncrementType(type)) {
+            if (canBeAutoIncrementType(type)) {
                 return new ColumnDefaultStrategy(true, null);
             } else if (type.equals(String.class)) {
                 return new ColumnDefaultStrategy(false, "gen_random_uuid()::text");
@@ -673,7 +673,7 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
         return " CHECK (" + columnName + " IN (" + allowedValues + "))";
     }
 
-    private boolean isAutoIncrementType(Class<?> type) {
+    private boolean canBeAutoIncrementType(Class<?> type) {
         return type.equals(Integer.class) || type.equals(int.class)
                 || type.equals(Long.class) || type.equals(long.class)
                 || type.equals(BigInteger.class)
