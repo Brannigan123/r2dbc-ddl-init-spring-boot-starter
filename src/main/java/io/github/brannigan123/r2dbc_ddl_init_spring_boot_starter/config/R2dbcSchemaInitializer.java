@@ -14,7 +14,15 @@ import java.time.OffsetDateTime;
 import java.time.OffsetTime;
 import java.time.Period;
 import java.time.ZonedDateTime;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 import org.jspecify.annotations.NonNull;
@@ -160,16 +168,15 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
         }
 
         List<String> expressions = new ArrayList<>();
+        String config = (searchIndexAnno.config() != null && !searchIndexAnno.config().isBlank())
+                ? searchIndexAnno.config()
+                : "english";
+
         for (PhysicalProperty physProp : getPhysicalProperties(entity)) {
             Field field = physProp.property().getField();
             if (field != null && field.isAnnotationPresent(SearchableField.class)) {
-                SearchableField searchableField = field.getAnnotation(SearchableField.class);
                 String columnName = physProp.columnName();
-                String weight = searchableField.weight().getCode();
-                String config = searchIndexAnno.config();
-
-                expressions.add(String.format("setweight(to_tsvector('%s', coalesce(%s, '')), '%s')",
-                        config, columnName, weight));
+                expressions.add(String.format("COALESCE(%s, '')", columnName));
             }
         }
 
@@ -180,7 +187,8 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
         }
 
         String searchColumnName = searchPhysProp.columnName();
-        String vectorExpression = String.join(" || ' ' || ", expressions);
+        String concatenatedColumns = String.join(" || ' ' || ", expressions);
+        String vectorExpression = String.format("to_tsvector('%s'::regconfig, %s)", config, concatenatedColumns);
         String columnDdl = String.format("%s tsvector GENERATED ALWAYS AS (%s) STORED", searchColumnName, vectorExpression);
 
         String indexName = "idx_" + tableName + "_" + searchColumnName;
@@ -474,8 +482,7 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
     private void createForeignKeys(RelationalPersistentEntity<?> entity, String tableName) {
         Class<?> entityClass = entity.getType();
 
-        // 1. Class-level @ForeignKey annotations (recommended for composite foreign
-        // keys)
+        // 1. Class-level @ForeignKey annotations
         ForeignKey[] classForeignKeys = entityClass.getAnnotationsByType(ForeignKey.class);
         for (ForeignKey foreignKey : classForeignKeys) {
             String[] localCols = foreignKey.columns();
@@ -488,7 +495,7 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
             }
         }
 
-        // 2. Field-level @ForeignKey annotations (single or specified multi-column)
+        // 2. Field-level @ForeignKey annotations
         for (PhysicalProperty physProp : getPhysicalProperties(entity)) {
             RelationalPersistentProperty property = physProp.property();
             Field field = property.getField();

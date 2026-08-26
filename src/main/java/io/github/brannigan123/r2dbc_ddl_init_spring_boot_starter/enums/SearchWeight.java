@@ -1,4 +1,4 @@
-package io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation;
+package io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.enums;
 
 public enum SearchWeight {
     HIGH("A"),

@@ -1,5 +1,7 @@
 package io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.annotation;
 
+import io.github.brannigan123.r2dbc_ddl_init_spring_boot_starter.enums.SearchWeight;
+
 import java.lang.annotation.Documented;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
