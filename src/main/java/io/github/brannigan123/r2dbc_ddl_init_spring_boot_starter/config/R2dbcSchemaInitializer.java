@@ -548,10 +548,10 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
         String sql = String.format(
                 "DO $$ BEGIN " +
                         "IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '%s') THEN " +
-                        "ALTER TABLE %s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s(%s) ON DELETE %s; " +
+                        "ALTER TABLE %s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s(%s) ON DELETE %s ON UPDATE %s; " +
                         "END IF; END $$;",
                 constraintName, tableName, constraintName, localColumnList, foreignKey.table(),
-                refColumnList, foreignKey.onDelete().getAction());
+                refColumnList, foreignKey.onDelete().getAction(), foreignKey.onUpdate().getAction());
 
         entityTemplate.getDatabaseClient()
                 .sql(sql)
@@ -731,7 +731,8 @@ public class R2dbcSchemaInitializer implements ApplicationRunner {
             return "TIME";
         } else if (type.equals(OffsetTime.class)) {
             return "TIMETZ";
+        } else {
+            return "VARCHAR(255)";
         }
-        return "VARCHAR(255)";
     }
 }
